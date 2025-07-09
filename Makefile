@@ -190,6 +190,7 @@ UPROGS=\
 	$U/_rm\
 	$U/_sh\
 	$U/_stressfs\
+	$U/_trace\
 	$U/_usertests\
 	$U/_grind\
 	$U/_wc\
@@ -375,3 +376,9 @@ zipball: clean submit-check
 	git archive --verbose --format zip --output lab.zip HEAD
 
 .PHONY: zipball clean grade submit-check
+
+gdb:
+	riscv64-linux-gnu-gdb kernel/kernel
+
+port:
+	@echo $(GDBPORT)
