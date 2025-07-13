@@ -315,28 +315,77 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    
+    // 如果原页面可写，标记为 COW 并移除写权限
+    if(flags & PTE_W) {
+      flags = (flags & ~PTE_W) | PTE_COW;
+      *pte = PA2PTE(pa) | flags;  // 更新父进程页表
+    }
+
+    if(mappages(new, i, PGSIZE, pa, flags) != 0) {
       goto err;
     }
+    kaddref((void*)pa);  // 增加引用计数
   }
   return 0;
 
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+int
+cowfault(pagetable_t pagetable, uint64 va)
+{
+  if(va >= MAXVA)
+    return -1;
+    
+  pte_t *pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return -1;
+  if((*pte & PTE_V) == 0)
+    return -1;
+  if((*pte & PTE_COW) == 0)
+    return -1;  // 不是 COW 页面
+    
+  uint64 pa = PTE2PA(*pte);
+  uint flags = PTE_FLAGS(*pte);
+  
+  acquire_refcnt();
+  if(kgetref((void*)pa) == 1) {
+    // 只有一个引用，直接恢复写权限
+    *pte = (*pte | PTE_W) & (~PTE_COW);
+    release_refcnt();
+  } else {
+    // 多个引用，需要复制页面
+    release_refcnt();
+    
+    char *mem = kalloc();
+    if(mem == 0)
+      return -1;
+      
+    memmove(mem, (char*)pa, PGSIZE);
+    
+    flags = (flags & ~PTE_COW) | PTE_W;
+    
+    // 先减少旧页面的引用计数
+    kfree((void*)pa);
+    
+    // 更新页表项指向新页面
+    *pte = PA2PTE((uint64)mem) | flags;
+  }
+  
+  sfence_vma();
+  return 0;
 }
 
 // mark a PTE invalid for user access.
@@ -366,9 +415,23 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
-       (*pte & PTE_W) == 0)
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
       return -1;
+    
+    // 如果是 COW 页面，先处理
+    if(*pte & PTE_COW) {
+      if(cowfault(pagetable, va0) != 0)
+        return -1;
+      // 重新获取 pte
+      pte = walk(pagetable, va0, 0);
+      if(pte == 0 || (*pte & PTE_V) == 0)
+        return -1;
+    }
+    
+    // 检查写权限
+    if((*pte & PTE_W) == 0)
+      return -1;
+    
     pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
     if(n > len)

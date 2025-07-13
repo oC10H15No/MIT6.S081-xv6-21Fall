@@ -228,7 +228,7 @@ def pre_make():
 def post_make():
     """Record the time after make completes so that the next run of
     make can be delayed if needed."""
-    global MAKE_TIMESTAMP
+    global MAKE_TIMESTAMP   
     MAKE_TIMESTAMP = int(time.time())
 
 def make(*target):
@@ -238,7 +238,7 @@ def make(*target):
     post_make()
 
 def show_command(cmd):
-    from pipes import quote
+    from shlex import quote
     print("\n$", " ".join(map(quote, cmd)))
 
 def maybe_unlink(*paths):

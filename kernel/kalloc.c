@@ -23,11 +23,35 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct {
+  struct spinlock lock;
+  int count[PHYSTOP/PGSIZE];  // 每个物理页的引用计数
+} refcnt;
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&refcnt.lock, "refcnt");
   freerange(end, (void*)PHYSTOP);
+}
+
+void acquire_refcnt() {
+  acquire(&refcnt.lock);
+}
+
+void release_refcnt() {
+  release(&refcnt.lock);
+}
+
+int kgetref(void *pa) {
+  return refcnt.count[(uint64)pa / PGSIZE];
+}
+
+void kaddref(void *pa) {
+  acquire_refcnt();
+  refcnt.count[(uint64)pa / PGSIZE]++;
+  release_refcnt();
 }
 
 void
@@ -51,6 +75,16 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  acquire_refcnt();
+  if(refcnt.count[(uint64)pa / PGSIZE] > 1) {
+    // 还有其他引用，只减少计数
+    refcnt.count[(uint64)pa / PGSIZE]--;
+    release_refcnt();
+    return;
+  }
+  refcnt.count[(uint64)pa / PGSIZE] = 0;
+  release_refcnt();
+
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -72,8 +106,12 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r) {
     kmem.freelist = r->next;
+    acquire_refcnt();
+    refcnt.count[(uint64)r / PGSIZE] = 1;  // 设置引用计数为1
+    release_refcnt();
+  }
   release(&kmem.lock);
 
   if(r)
