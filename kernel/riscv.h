@@ -338,6 +338,16 @@ r_ra()
   return x;
 }
 
+// read and write fp, the frame pointer, which xv6 uses to hold
+// the address of the current stack frame.
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, fp" : "=r" (x) );
+  return x;
+}
+
 // flush the TLB.
 static inline void
 sfence_vma()

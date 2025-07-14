@@ -176,3 +176,27 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void
+backtrace(void)
+{
+  printf("backtrace:\n");
+  
+  // Get the current frame pointer
+  uint64 fp = r_fp();
+
+  // Get the stack boundaries
+  uint64 stack_bottom = PGROUNDDOWN(fp);
+  uint64 stack_top = stack_bottom + PGSIZE;
+
+  // Traverse the stack frames
+  while (fp >= stack_bottom && fp < stack_top) {
+    uint64 ra = *(uint64*)(fp-8);  // Return address is stored 8 bytes before the frame pointer
+    printf("%p\n", (void*)ra);
+    uint64 sp = *(uint64*)(fp-16); // 调用者的帧指针（即上一个栈帧的fp）存放在向上16字节的位置
+    if (sp <= fp) {
+      break;
+    }
+    fp = sp;                       // Move to the previous frame pointer
+  }
+}

@@ -77,8 +77,33 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    if (p->alarm_interval > 0) {
+      // increment ticks passed since the last alarm
+      // only if this is a timer interrupt.
+      p->ticks_passed += 1; // increment ticks passed only when it's a timer interrupt
+    }
+
+    // check if the alarm handler should be called
+    // 1. if the ticks passed since the last alarm is greater than or equal to the interval
+    // 2. if the interval is greater than 0
+    // 3. if the process is not already handling an alarm
+    if(p->ticks_passed >= p->alarm_interval && p->alarm_interval > 0 && p->handling_alarm == 0) {
+      p->ticks_passed = 0; // reset ticks passed
+
+      p->handling_alarm = 1; // set handling alarm flag
+      // backup the trapframe to restore it after handling the alarm
+      p->alarm_trackframe_backup = *(p->trapframe);
+
+      // call the alarm handler
+      // set the program counter to the alarm handler
+      // the program would start executing from the alarm handler not from the instruction after the ecall
+      p->trapframe->epc = (uint64)p->alarm_handler; 
+    }
+
+    // give up the CPU if this is a timer interrupt.
     yield();
+  }
 
   usertrapret();
 }

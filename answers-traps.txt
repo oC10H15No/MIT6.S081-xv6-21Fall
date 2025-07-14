@@ -1,0 +1,116 @@
+# Answer for `lab/traps`
+
+### Analysis of the Assembly Code
+
+Before answering the questions, let's understand the key concepts from the RISC-V calling convention visible in the assembly:
+
+*   **Function Prologue:** At the start of most functions, you see instructions to set up a stack frame. This typically involves:
+    1.  `addi sp, sp, -N`: Make space on the stack for local variables and saved registers.
+    2.  `sd ra, offset(sp)`: Save the return address register (`ra`) on the stack. `ra` holds the address where the function should return to its caller.
+    3.  `sd s0, offset(sp)`: Save the caller's frame pointer (`s0`). Registers `s0-s11` are callee-saved, meaning a function must restore them before it returns.
+    4.  `addi s0, sp, N`: Set up the new frame pointer (`s0`) for the current function.
+
+*   **Function Epilogue:** At the end of a function, the reverse happens:
+    1.  `ld ra, offset(sp)`: Restore the caller's return address.
+    2.  `ld s0, offset(sp)`: Restore the caller's frame pointer.
+    3.  `addi sp, sp, N`: Deallocate the stack frame.
+    4.  `ret`: An alias for `jalr zero, 0(ra)`, which jumps to the address stored in `ra`.
+
+*   **Argument Passing:** The first eight integer/pointer arguments are passed in registers `a0` through `a7`.
+    *   `a0`: 1st argument
+    *   `a1`: 2nd argument
+    *   `a2`: 3rd argument
+    *   ... and so on.
+
+*   **Return Value:** The return value is placed in register `a0`.
+
+---
+
+1.  **Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?**
+
+    According to the RISC-V calling convention, the first eight integer or pointer arguments to functions are passed in registers `a0` through `a7`.
+    *   `a0` holds the first argument.
+    *   `a1` holds the second argument.
+    *   `a2` holds the third argument, and so on.
+
+    In `main`'s call to `printf("%d %d\n", f(8)+1, 13)`, there are three arguments:
+    1.  The format string `"%d %d\n"` (a pointer).
+    2.  The result of `f(8)+1`.
+    3.  The integer `13`.
+
+    Looking at the assembly in `main`:
+    ```assembly
+    2c:	4635                	li	a2,13
+    ```
+    The third argument, `13`, is loaded into register **`a2`**.
+
+2.  **Where is the call to function f in the assembly code for main? Where is the call to g? (Hint: the compiler may inline functions.)**
+
+    There are **no calls** to functions `f` or `g` in the assembly code for `main`.
+
+    The compiler has optimized the code through a process called **inlining**.
+    *   It sees that `f(x)` simply calls `g(x)`.
+    *   It sees that `g(x)` is a very simple function that just returns `x + 3`.
+    *   Therefore, the compiler can determine that `f(8)` is equivalent to `g(8)`, which evaluates to `8 + 3 = 11`.
+    *   The C code `f(8) + 1` is then calculated at compile time to be `11 + 1 = 12`.
+
+    This calculated result, `12`, is loaded directly into the second argument register (`a1`) before calling `printf`:
+    ```assembly
+    2e:	45b1                	li	a1,12
+    ```
+    Because the result was computed at compile time, there was no need to actually call the functions `f` or `g`.
+
+3.  **At what address is the function printf located?**
+
+    By looking at the disassembly labels, the `printf` function is located at address **`0x6fe`**.
+    ```assembly
+    00000000000006fe <printf>:
+    ```
+
+4.  **What value is in the register ra just after the jalr to printf in main?**
+
+    The `jal` (Jump and Link) instruction at address `0x38` calls `printf`. The purpose of `jal` is to jump to a function while simultaneously storing the address of the **next instruction** in the return address register (`ra`).
+
+    The call is:
+    ```assembly
+    38:	6c6000ef          	jal	6fe <printf>
+    ```
+    The instruction immediately following the `jal` is at address `0x3c`:
+    ```assembly
+    3c:	4501                	li	a0,0
+    ```
+    Therefore, just after the `jal` instruction executes (i.e., inside the `printf` function), the value in register `ra` will be **`0x3c`**.
+
+5.  **Run the following code. ... What is the output? ... If the RISC-V were instead big-endian what would you set i to in order to yield the same output? Would you need to change 57616 to a different value?**
+
+    **Output:**
+    The final output is **`HE110 World`**.
+
+    **Explanation:**
+    *   `printf("H%x ...", 57616, ...)`: The `%x` format specifier prints an integer in hexadecimal. The decimal value `57616` is `0xE110` in hex. So this part prints `HE110`.
+    *   `printf("... Wo%s", ..., (char *) &i)`: The `%s` format specifier prints a string. The argument `(char *) &i` tells `printf` to treat the memory location of the integer `i` as the starting address of a null-terminated string.
+    *   `i = 0x00646c72`. Since RISC-V is **little-endian**, the bytes of this integer are stored in memory from least-significant to most-significant:
+        *   Address `&i + 0`: `0x72` (ASCII character 'r')
+        *   Address `&i + 1`: `0x6c` (ASCII character 'l')
+        *   Address `&i + 2`: `0x64` (ASCII character 'd')
+        *   Address `&i + 3`: `0x00` (The null terminator `\0`)
+    *   `printf` reads the bytes `r`, `l`, `d` and then stops at the null terminator. This forms the string "rld". So this part prints `World`.
+
+    **Big-Endian Version:**
+    *   To get the same output "rld" on a big-endian machine, the bytes in memory must be in the same order: `72`, `6c`, `64`, `00`. On a big-endian system, this corresponds to the integer value `0x726c6400`. So you would set **`i = 0x726c6400`**.
+    *   You would **not** need to change the value `57616`. The `%x` specifier operates on the numerical *value* of the argument, not its byte representation in memory. The value `57616` is the same regardless of endianness.
+
+6.  **In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?**
+
+    `printf("x=%d y=%d", 3);`
+
+    **What is printed:**
+    After 'y=', some **unpredictable, garbage value** will be printed.
+
+    **Why this happens:**
+    The `printf` function is not magical; it blindly trusts its format string to determine how many arguments to read and where to find them.
+    1.  The format string `"%d %d"` tells `printf` to expect two integer arguments after the string itself.
+    2.  According to the calling convention, the first integer argument (`3`) will be read from register `a1`. This correctly prints `x=3`.
+    3.  When `printf` encounters the second `%d`, it proceeds to look for the second integer argument, which it expects to find in register `a2`.
+    4.  However, the programmer only provided one argument (`3`). No value was intentionally placed in `a2`.
+    5.  Therefore, `printf` will read whatever leftover "garbage" data happens to be in register `a2` from previous, unrelated operations and interpret it as an integer. This results in undefined behavior and the printing of an arbitrary number.
