@@ -102,6 +102,38 @@ e1000_transmit(char *buf, int len)
   // a pointer so that it can be freed after send completes.
   //
 
+  // 统一锁的名称，假设为 e1000_lock
+  acquire(&e1000_lock);
+
+  // 1. 获取下一个可用的描述符索引
+  uint32 tail = regs[E1000_TDT];
+
+  // 2. 检查环是否已满
+  //    如果DD位没有被硬件设置，说明硬件还没处理完这个旧的描述符
+  if((tx_ring[tail].status & E1000_TXD_STAT_DD) == 0){
+    release(&e1000_lock);
+    return -1;
+  }
+
+  // 3. 释放上一次使用这个描述符时发送的缓冲区（如果存在）
+  if(tx_bufs[tail]) {
+    kfree(tx_bufs[tail]);
+  }
+
+  // 4. 保存新的缓冲区指针，以便将来释放
+  tx_bufs[tail] = buf;
+  
+  // 5. 填充描述符
+  tx_ring[tail].addr = (uint64)buf;
+  tx_ring[tail].length = len;
+  tx_ring[tail].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+
+  tx_ring[tail].status = 0; // 清除状态位
+
+  // 6. 更新尾指针，通知硬件开始发送
+  regs[E1000_TDT] = (tail + 1) % TX_RING_SIZE;
+  
+  release(&e1000_lock);
   
   return 0;
 }
@@ -116,6 +148,45 @@ e1000_recv(void)
   // Create and deliver a buf for each packet (using net_rx()).
   //
 
+  // Get current receive descriptor position
+  while (1)
+  {
+    // Get next descriptor to check
+    int tail = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+    // Check if new packet is available
+    if (!(rx_ring[tail].status & E1000_RXD_STAT_DD))
+    {
+      break;
+    }
+
+    // If packet has no errors
+    if (rx_ring[tail].status & E1000_RXD_STAT_EOP)
+    {
+      // Get the received packet length
+      int length = rx_ring[tail].length;
+
+      // Deliver packet to network stack
+      net_rx(rx_bufs[tail], length);
+
+      // Allocate new buffer for this descriptor
+      // Then allocate a new buffer using kalloc() to replace the one just given to net_rx()
+      rx_bufs[tail] = kalloc();
+      if (!rx_bufs[tail])
+      {
+        panic("e1000_recv: kalloc failed");
+      }
+
+      // Update descriptor with new buffer
+      // Clear the descriptor's status bits to zero.
+      rx_ring[tail].addr = (uint64)rx_bufs[tail];
+      rx_ring[tail].status = 0;
+    }
+
+    // Update tail register to mark this packet as processed
+    regs[E1000_RDT] = tail;
+  }
+
 }
 
 void
@@ -126,5 +197,7 @@ e1000_intr(void)
   // further interrupts.
   regs[E1000_ICR] = 0xffffffff;
 
+  // acquire(&e1000_lock);
   e1000_recv();
+  // release(&e1000_lock);
 }
