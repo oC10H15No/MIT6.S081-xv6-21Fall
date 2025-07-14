@@ -67,6 +67,11 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+#ifdef LAB_PGTBL
+void*           superalloc(void);
+void            superfree(void *);
+int             is_superpage(uint64);
+#endif
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -181,10 +186,9 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
-#if defined(LAB_PGTBL) || defined(SOL_MMAP)
-void            vmprint(pagetable_t);
-#endif
 #ifdef LAB_PGTBL
+int             mappages_super(pagetable_t, uint64, uint64, uint64, int);
+void            vmprint(pagetable_t);
 pte_t*          pgpte(pagetable_t, uint64);
 #endif
 
