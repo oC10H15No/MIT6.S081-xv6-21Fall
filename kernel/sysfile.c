@@ -309,6 +309,7 @@ sys_open(void)
   struct file *f;
   struct inode *ip;
   int n;
+  int max_symlinks = 10; // 最大符号链接跟随次数
 
   argint(1, &omode);
   if((n = argstr(0, path, MAXPATH)) < 0)
@@ -339,6 +340,45 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  // 处理符号链接（在分配文件结构之前）
+  if (ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+    int count = 0;
+    char sympath[MAXPATH];
+    
+    while (ip->type == T_SYMLINK && count < 10) {
+      int symlen = ip->size;
+      if (symlen >= MAXPATH) 
+        symlen = MAXPATH - 1;
+
+      // 读取符号链接的目标路径
+      if (readi(ip, 0, (uint64)sympath, 0, symlen) != symlen) {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      sympath[symlen] = '\0';
+
+      // 释放当前的符号链接 inode
+      iunlockput(ip);
+
+      // 查找符号链接指向的文件
+      if ((ip = namei(sympath)) == 0) {
+        end_op();
+        return -1;
+      }
+
+      ilock(ip);
+      count++;
+    }
+
+    // 检查是否超过了最大跟随深度
+    if (count >= max_symlinks) {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -501,5 +541,33 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], linkname[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, linkname, MAXPATH) < 0){
+    return -1;
+  }
+
+  begin_op();
+
+  if((ip = create(linkname, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)) != strlen(target)) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
   return 0;
 }
